@@ -17,6 +17,20 @@ export default function createDrawSession({
     let runId = 0;
     let activePromise = null;
     let wakePausedSession = null;
+    let startedAt = 0;
+    let pausedAt = null;
+    let pausedDurationMs = 0;
+    let stoppedAt = null;
+
+    const currentIntervalMs = () => {
+        const value = typeof intervalMs === "function" ? intervalMs() : intervalMs;
+        return Math.max(0, Number(value) || 0);
+    };
+
+    const elapsedMs = () => {
+        const endedAt = stoppedAt ?? pausedAt ?? now();
+        return Math.max(0, endedAt - startedAt - pausedDurationMs);
+    };
 
     const snapshot = function (message = null) {
         return {
@@ -24,13 +38,17 @@ export default function createDrawSession({
             cursor,
             total: commands.length,
             progress: commands.length ? cursor / commands.length : 0,
-            remainingMs: Math.max(0, commands.length - cursor) * intervalMs,
+            remainingMs: Math.max(0, commands.length - cursor) * currentIntervalMs(),
+            elapsedMs: elapsedMs(),
             message
         };
     };
 
     const update = function (nextState = state, message = null) {
         state = nextState;
+        if (["completed", "canceled", "failed"].includes(state) && stoppedAt === null) {
+            stoppedAt = now();
+        }
         onChange(snapshot(message));
     };
 
@@ -64,7 +82,7 @@ export default function createDrawSession({
             cursor++;
             update("drawing");
             const elapsed = now() - startedAt;
-            await wait(Math.max(0, intervalMs - elapsed));
+            await wait(Math.max(0, currentIntervalMs() - elapsed));
         }
     };
 
@@ -79,6 +97,10 @@ export default function createDrawSession({
             cursor = 0;
             paused = false;
             canceled = false;
+            startedAt = now();
+            pausedAt = null;
+            pausedDurationMs = 0;
+            stoppedAt = null;
             update("drawing");
 
             activePromise = (async function () {
@@ -112,10 +134,13 @@ export default function createDrawSession({
         pause: function () {
             if (state !== "drawing") return;
             paused = true;
+            pausedAt = now();
             update("paused");
         },
         resume: function () {
             if (state !== "paused") return;
+            pausedDurationMs += Math.max(0, now() - pausedAt);
+            pausedAt = null;
             paused = false;
             wakePausedSession?.();
             update("drawing");
@@ -123,9 +148,16 @@ export default function createDrawSession({
         cancel: function () {
             if (["idle", "completed", "canceled", "failed"].includes(state)) return;
             canceled = true;
+            if (pausedAt !== null) {
+                pausedDurationMs += Math.max(0, now() - pausedAt);
+                pausedAt = null;
+            }
             paused = false;
             wakePausedSession?.();
             update("canceled");
+        },
+        refresh: function () {
+            if (["drawing", "paused", "verifying"].includes(state)) update();
         },
         getSnapshot: snapshot,
         getActivePromise: () => activePromise

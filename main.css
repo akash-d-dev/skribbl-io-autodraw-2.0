@@ -17,11 +17,13 @@
 
 #autoDrawProgress {
     position: absolute;
-    right: 12px;
-    bottom: 12px;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 100%;
+    box-sizing: border-box;
     z-index: 30;
     display: grid;
-    grid-template-columns: minmax(110px, auto) minmax(100px, 180px) auto auto;
+    grid-template-columns: minmax(90px, auto) minmax(80px, 120px) auto minmax(290px, 1fr) auto auto;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
@@ -42,6 +44,89 @@
     accent-color: #51c878;
 }
 
+#autoDrawProgress .autoDrawTimeEstimate {
+    min-width: 62px;
+    white-space: nowrap;
+    text-align: center;
+}
+
+#autoDrawProgress .autoDrawSpeed {
+    display: grid;
+    grid-template-columns: auto auto minmax(100px, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+}
+
+#autoDrawProgress .autoDrawSpeed label {
+    white-space: nowrap;
+}
+
+#autoDrawProgress .autoDrawSpeed output {
+    display: inline-block;
+    min-width: 2.2em;
+    text-align: right;
+}
+
+#autoDrawProgress .autoDrawSpeed input {
+    --autoDrawSpeedProgress: 0%;
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    min-width: 100px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: linear-gradient(
+        to right,
+        #51c878 0%,
+        #51c878 var(--autoDrawSpeedProgress),
+        rgba(255, 255, 255, 0.25) var(--autoDrawSpeedProgress),
+        rgba(255, 255, 255, 0.25) 100%
+    );
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100% 6px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+#autoDrawProgress .autoDrawSpeed input::-webkit-slider-runnable-track {
+    height: 6px;
+    background: transparent;
+}
+
+#autoDrawProgress .autoDrawSpeed input::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 50%;
+    background: #51c878;
+}
+
+#autoDrawProgress .autoDrawSpeed input::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+#autoDrawProgress .autoDrawSpeed input::-moz-range-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: #51c878;
+}
+
+#autoDrawProgress .autoDrawSpeed input::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 50%;
+    background: #51c878;
+}
+
 #autoDrawProgress button {
     min-width: 58px;
     padding: 5px 8px;
@@ -52,6 +137,10 @@
     cursor: pointer;
 }
 
+#autoDrawProgress .autoDrawSpeedButton {
+    min-width: 42px;
+}
+
 #autoDrawProgress button:disabled {
     cursor: default;
     opacity: 0.5;
@@ -59,14 +148,22 @@
 
 @media (max-width: 720px) {
     #autoDrawProgress {
-        left: 8px;
-        right: 8px;
-        bottom: 8px;
         grid-template-columns: 1fr auto auto;
     }
 
     #autoDrawProgress progress {
         grid-column: 1 / -1;
         grid-row: 2;
+    }
+
+    #autoDrawProgress .autoDrawSpeed {
+        grid-column: 1 / -1;
+        grid-row: 4;
+    }
+
+    #autoDrawProgress .autoDrawTimeEstimate {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        text-align: left;
     }
 }

@@ -20,7 +20,7 @@ const canvas = createCanvas(domHelper.getCanvasElement());
 const toolbar = createToolbar(domHelper);
 const renderer = createCommandRenderer(canvas, toolbar);
 const planner = createPlannerClient();
-const progress = createProgressControl(domHelper.getCanvasContainerElement());
+const progress = createProgressControl(domHelper.getToolbarElement());
 const clearToolElement = domHelper.getClearToolElement();
 
 let activeSession = null;
@@ -43,7 +43,8 @@ const cancelCurrentWork = function () {
 progress.setHandlers({
     pause: () => activeSession?.pause(),
     resume: () => activeSession?.resume(),
-    cancel: cancelCurrentWork
+    cancel: cancelCurrentWork,
+    speedChange: () => activeSession?.refresh()
 });
 
 const executePlan = async function (plan, requestId) {
@@ -59,7 +60,7 @@ const executePlan = async function (plan, requestId) {
     const generation = canvasGeneration;
     const session = createDrawSession({
         execute: renderer.execute,
-        intervalMs: commandIntervals[plan.mode],
+        intervalMs: () => progress.getCommandInterval(commandIntervals[plan.mode]),
         isValid: () => generation === canvasGeneration && toolbar.isEnabled(),
         onChange: progress.update
     });
@@ -120,6 +121,7 @@ const handleDrop = function (event) {
 
     const requestId = ++dropRequestId;
     cancelActiveSession();
+    progress.resetSpeed();
     progress.showAnalyzing();
     domHelper.showCanvasOverlay("Analyzing image");
 

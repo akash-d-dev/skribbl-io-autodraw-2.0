@@ -1,7 +1,16 @@
+import createSpeedControl from "./speed-control.js";
+import createTimeEstimator from "./time-estimator.js";
+
 export default function createProgressControl(container) {
     const element = document.createElement("div");
     element.id = "autoDrawProgress";
     element.hidden = true;
+    let handlers = {
+        pause: () => {},
+        resume: () => {},
+        cancel: () => {},
+        speedChange: () => {}
+    };
 
     const label = document.createElement("span");
     label.className = "autoDrawProgressLabel";
@@ -15,15 +24,13 @@ export default function createProgressControl(container) {
     cancelButton.type = "button";
     cancelButton.textContent = "Cancel";
 
-    element.append(label, progress, pauseButton, cancelButton);
+    element.append(label, progress);
+    const timeEstimator = createTimeEstimator(element);
+    const speedControl = createSpeedControl(element, () => handlers.speedChange());
+    element.append(pauseButton, cancelButton);
     container.appendChild(element);
 
     let hideTimer = null;
-    let handlers = {
-        pause: () => {},
-        resume: () => {},
-        cancel: () => {}
-    };
 
     pauseButton.addEventListener("click", () => {
         if (pauseButton.dataset.action === "resume") handlers.resume();
@@ -39,6 +46,7 @@ export default function createProgressControl(container) {
             clearTimeout(hideTimer);
             element.hidden = false;
             progress.value = snapshot.progress;
+            timeEstimator.update(snapshot);
             const percent = Math.round(snapshot.progress * 100);
 
             if (snapshot.state === "paused") {
@@ -75,6 +83,7 @@ export default function createProgressControl(container) {
             element.hidden = false;
             label.textContent = "Analyzing image";
             progress.removeAttribute("value");
+            timeEstimator.showCalculating();
             pauseButton.disabled = true;
             cancelButton.disabled = false;
         },
@@ -82,6 +91,9 @@ export default function createProgressControl(container) {
             clearTimeout(hideTimer);
             element.hidden = true;
             progress.value = 0;
-        }
+            timeEstimator.clear();
+        },
+        getCommandInterval: speedControl.getCommandInterval,
+        resetSpeed: speedControl.reset
     };
 }

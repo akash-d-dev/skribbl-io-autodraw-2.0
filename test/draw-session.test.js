@@ -78,3 +78,47 @@ test("draw session appends bounded repair commands", async () => {
     assert.equal(result.state, "completed");
     assert.equal(result.total, 2);
 });
+
+test("draw session applies speed changes between commands", async () => {
+    const waits = [];
+    let intervalMs = 20;
+    const session = createDrawSession({
+        execute: async command => {
+            if (command.id === 1) intervalMs = 5;
+        },
+        intervalMs: () => intervalMs,
+        wait: async duration => waits.push(duration),
+        now: () => 0
+    });
+
+    await session.start([{ id: 1 }, { id: 2 }]);
+
+    assert.deepEqual(waits, [5, 5]);
+});
+
+test("draw session refresh recalculates remaining time without advancing", async () => {
+    const snapshots = [];
+    let intervalMs = 20;
+    let finishCommand;
+    const session = createDrawSession({
+        execute: () => new Promise(resolve => {
+            finishCommand = resolve;
+        }),
+        intervalMs: () => intervalMs,
+        wait: async () => {},
+        now: () => 0,
+        onChange: snapshot => snapshots.push(snapshot)
+    });
+
+    const resultPromise = session.start([{ id: 1 }]);
+    await nextTurn();
+    intervalMs = 5;
+    session.refresh();
+
+    assert.equal(snapshots.at(-1).cursor, 0);
+    assert.equal(snapshots.at(-1).remainingMs, 5);
+
+    session.cancel();
+    finishCommand();
+    await resultPromise;
+});
