@@ -4,7 +4,11 @@ import test from "node:test";
 
 import { PNG } from "pngjs";
 
-import { closestPaletteColor, colorKey, colorsEqual } from "../src/planning/color-utils.js";
+import {
+    binaryIntersectionOverUnion,
+    rasterizeBinaryPlan
+} from "../src/planning/binary-rasterizer.js";
+import { closestPaletteColor, colorKey } from "../src/planning/color-utils.js";
 import { createDrawPlan } from "../src/planning/planner.js";
 
 const palette = [
@@ -92,78 +96,50 @@ const createDonutImage = function (width, height) {
     return { image: { width, height, data }, mask };
 };
 
-const distanceToSegmentSquared = function (x, y, from, to) {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const lengthSquared = dx * dx + dy * dy;
-    const position = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
-        ((x - from.x) * dx + (y - from.y) * dy) / lengthSquared));
-    const nearestX = from.x + position * dx;
-    const nearestY = from.y + position * dy;
-    return (x - nearestX) ** 2 + (y - nearestY) ** 2;
-};
-
-const rasterizeSilhouette = function (plan) {
-    const target = plan.target;
-    const raster = new Uint8Array(target.width * target.height);
-    const foregroundColor = target.foregroundColor;
-
-    for (const command of plan.commands) {
-        const value = colorsEqual(command.color, foregroundColor) ? 1 : 0;
-        if (command.kind === "stroke") {
-            const radius = 1.45;
-            const minX = Math.max(0, Math.floor(Math.min(command.from.x, command.to.x) - radius));
-            const maxX = Math.min(target.width - 1,
-                Math.ceil(Math.max(command.from.x, command.to.x) + radius));
-            const minY = Math.max(0, Math.floor(Math.min(command.from.y, command.to.y) - radius));
-            const maxY = Math.min(target.height - 1,
-                Math.ceil(Math.max(command.from.y, command.to.y) + radius));
-            for (let y = minY; y <= maxY; y++) {
-                for (let x = minX; x <= maxX; x++) {
-                    if (distanceToSegmentSquared(
-                        x + 0.5,
-                        y + 0.5,
-                        command.from,
-                        command.to
-                    ) <= radius * radius) raster[y * target.width + x] = value;
-                }
-            }
-            continue;
-        }
-
-        const seedX = Math.floor(command.point.x);
-        const seedY = Math.floor(command.point.y);
-        const seed = seedY * target.width + seedX;
-        const replaced = raster[seed];
-        if (replaced === value) continue;
-        const queue = [seed];
-        raster[seed] = value;
-        for (let cursor = 0; cursor < queue.length; cursor++) {
-            const pixel = queue[cursor];
-            const x = pixel % target.width;
-            const y = Math.floor(pixel / target.width);
-            for (const [nextX, nextY] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
-                if (nextX < 0 || nextX >= target.width || nextY < 0 || nextY >= target.height) {
-                    continue;
-                }
-                const next = nextY * target.width + nextX;
-                if (raster[next] !== replaced) continue;
-                raster[next] = value;
-                queue.push(next);
-            }
+const createComplexSilhouette = function (width, height) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    const mask = new Uint8Array(width * height);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const dx = x - centerX;
+            const dy = y - centerY;
+            const angle = Math.atan2(dy, dx);
+            const boundary = 190
+                + 28 * Math.sin(23 * angle)
+                + 12 * Math.sin(67 * angle);
+            const pixel = y * width + x;
+            const foreground = Math.hypot(dx, dy) < boundary;
+            mask[pixel] = foreground ? 1 : 0;
+            data[pixel * 4 + 3] = foreground ? 255 : 0;
         }
     }
-    return raster;
+    return { image: { width, height, data }, mask };
 };
 
-const intersectionOverUnion = function (first, second) {
-    let intersection = 0;
-    let union = 0;
-    for (let pixel = 0; pixel < first.length; pixel++) {
-        if (first[pixel] || second[pixel]) union++;
-        if (first[pixel] && second[pixel]) intersection++;
+const createComplexColorImage = function (width, height) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const index = (y * width + x) * 4;
+            const dx = x - 280;
+            const dy = y - height / 2;
+            const angle = Math.atan2(dy, dx);
+            const redBoundary = 180 + 25 * Math.sin(13 * angle);
+            const blue = (x - 580) ** 2 + (y - height / 2) ** 2 < 105 ** 2;
+            const color = Math.hypot(dx, dy) < redBoundary
+                ? { r: 255, g: 0, b: 0 }
+                : blue
+                    ? { r: 0, g: 0, b: 255 }
+                    : { r: 255, g: 255, b: 255 };
+            data[index] = color.r;
+            data[index + 1] = color.g;
+            data[index + 2] = color.b;
+            data[index + 3] = 255;
+        }
     }
-    return intersection / union;
+    return { width, height, data };
 };
 
 const scanlineRuns = function (mask, width, height) {
@@ -213,8 +189,8 @@ test("large silhouette is fast, accurate, and uses at least 75% fewer commands",
         offset: { x: 20, y: 20 }
     });
     const elapsed = performance.now() - startedAt;
-    const raster = rasterizeSilhouette(plan);
-    const fidelity = intersectionOverUnion(raster, plan.target.mask);
+    const raster = rasterizeBinaryPlan(plan);
+    const fidelity = binaryIntersectionOverUnion(raster, plan.target.mask);
 
     assert.equal(plan.mode, "silhouette");
     assert.ok(plan.commands.length <= scanlineRuns(mask, image.width, image.height) * 0.25);
@@ -230,13 +206,43 @@ test("silhouette holes remain empty without flood leaks", () => {
         canvas: { width: 800, height: 600 },
         offset: { x: 50, y: 40 }
     });
-    const raster = rasterizeSilhouette(plan);
+    const raster = rasterizeBinaryPlan(plan);
 
     assert.equal(plan.mode, "silhouette");
     assert.equal(plan.metrics.contours, 2);
     assert.ok(plan.commands.length <= scanlineRuns(mask, image.width, image.height) * 0.25);
-    assert.ok(intersectionOverUnion(raster, plan.target.mask) >= 0.98);
+    assert.ok(binaryIntersectionOverUnion(raster, plan.target.mask) >= 0.98);
     assert.equal(raster[300 * 800 + 400], 0);
+});
+
+test("complex silhouette increases tolerance only while fidelity stays above 98%", () => {
+    const { image } = createComplexSilhouette(760, 560);
+    const plan = createDrawPlan({
+        image,
+        palette,
+        canvas: { width: 800, height: 600 },
+        offset: { x: 20, y: 20 }
+    });
+    const raster = rasterizeBinaryPlan(plan);
+
+    assert.equal(plan.mode, "silhouette");
+    assert.ok(plan.metrics.contourTolerance > 1.25);
+    assert.ok(plan.commands.length < 250);
+    assert.ok(binaryIntersectionOverUnion(raster, plan.target.mask) >= 0.98);
+});
+
+test("large color regions use fills only when they beat the stroke plan", () => {
+    const image = createComplexColorImage(760, 560);
+    const plan = createDrawPlan({
+        image,
+        palette,
+        canvas: { width: 800, height: 600 },
+        offset: { x: 20, y: 20 }
+    });
+
+    assert.equal(plan.mode, "color");
+    assert.ok(plan.metrics.filledRegions >= 1);
+    assert.ok(plan.commands.length < plan.metrics.baselineCommands * 0.8);
 });
 
 for (const file of ["icon128.png", "promo-image.png"]) {

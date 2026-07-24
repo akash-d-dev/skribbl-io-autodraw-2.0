@@ -224,7 +224,7 @@ export const analyzeImage = function (image, palette) {
 
     return {
         mode: confidence >= 0.72
-            && distribution.share >= 0.7
+            && distribution.share >= 0.9
             && foregroundCoverage >= 0.005
             && foregroundCoverage <= 0.97
             ? "silhouette"

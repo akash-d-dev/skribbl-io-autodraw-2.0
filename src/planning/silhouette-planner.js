@@ -1,9 +1,16 @@
 import { colorsEqual } from "./color-utils.js";
+import {
+    binaryIntersectionOverUnion,
+    rasterizeBinaryPlan
+} from "./binary-rasterizer.js";
 import { traceContours } from "./contour-tracer.js";
 import { distanceInsideValue } from "./distance-map.js";
 import { offsetClosedContour, pointInPolygon } from "./geometry.js";
 
 const white = { r: 255, g: 255, b: 255 };
+const fidelityFloor = 0.98;
+const optimizationCommandThreshold = 80;
+const toleranceCandidates = [1.25, 1.75, 2.5, 3.5, 5];
 
 const findFillSeed = function (contour, mask, width, height, targetValue, distance) {
     const minX = Math.max(0, Math.floor(contour.bounds.minX));
@@ -71,61 +78,90 @@ export const planSilhouette = function ({
     offset,
     contourTolerance = 1.25
 }) {
-    const contours = traceContours(analysis.mask, width, height, contourTolerance);
     const foregroundDistance = distanceInsideValue(analysis.mask, width, height, 1);
     const backgroundDistance = distanceInsideValue(analysis.mask, width, height, 0);
-    const commands = [];
+    const target = {
+        kind: "binary",
+        width: canvas.width,
+        height: canvas.height,
+        mask: createCanvasMask(analysis.mask, width, height, canvas, offset),
+        foregroundColor: analysis.foregroundColor,
+        backgroundColor: analysis.backgroundColor
+    };
 
-    if (!colorsEqual(analysis.backgroundColor, white)) {
-        commands.push({
-            kind: "fill",
-            color: analysis.backgroundColor,
-            point: { x: 1, y: 1 }
-        });
-    }
-
-    for (const contour of contours) {
-        const targetValue = contour.depth % 2 === 0 ? 1 : 0;
-        const color = targetValue ? analysis.foregroundColor : analysis.backgroundColor;
-        const seed = findFillSeed(
-            contour,
-            analysis.mask,
-            width,
-            height,
-            targetValue,
-            targetValue ? foregroundDistance : backgroundDistance
-        );
-        const drawableContour = seed && seed.clearance >= 3
-            ? offsetClosedContour(contour.points, 1.45, targetValue === 1)
-            : contour.points;
-        commands.push(...contourCommands(drawableContour, color, offset));
-        if (seed && seed.clearance >= 1.5) {
+    const buildCandidate = function (tolerance) {
+        const contours = traceContours(analysis.mask, width, height, tolerance);
+        const commands = [];
+        if (!colorsEqual(analysis.backgroundColor, white)) {
             commands.push({
                 kind: "fill",
-                color,
-                point: {
-                    x: seed.x + offset.x,
-                    y: seed.y + offset.y
-                }
+                color: analysis.backgroundColor,
+                point: { x: 1, y: 1 }
             });
+        }
+
+        for (const contour of contours) {
+            const targetValue = contour.depth % 2 === 0 ? 1 : 0;
+            const color = targetValue ? analysis.foregroundColor : analysis.backgroundColor;
+            const seed = findFillSeed(
+                contour,
+                analysis.mask,
+                width,
+                height,
+                targetValue,
+                targetValue ? foregroundDistance : backgroundDistance
+            );
+            const drawableContour = seed && seed.clearance >= 3
+                ? offsetClosedContour(contour.points, 1.45, targetValue === 1)
+                : contour.points;
+            commands.push(...contourCommands(drawableContour, color, offset));
+            if (seed && seed.clearance >= 1.5) {
+                commands.push({
+                    kind: "fill",
+                    color,
+                    point: {
+                        x: seed.x + offset.x,
+                        y: seed.y + offset.y
+                    }
+                });
+            }
+        }
+        return { contours, commands, tolerance };
+    };
+
+    const requestedTolerance = Math.max(contourTolerance, toleranceCandidates[0]);
+    let best = buildCandidate(requestedTolerance);
+    let fidelity = null;
+    if (best.commands.length >= optimizationCommandThreshold) {
+        const basePlan = { commands: best.commands, target };
+        fidelity = binaryIntersectionOverUnion(
+            rasterizeBinaryPlan(basePlan),
+            target.mask
+        );
+        for (const tolerance of toleranceCandidates) {
+            if (tolerance <= requestedTolerance) continue;
+            const candidate = buildCandidate(tolerance);
+            if (candidate.commands.length >= best.commands.length) continue;
+            const candidateFidelity = binaryIntersectionOverUnion(
+                rasterizeBinaryPlan({ commands: candidate.commands, target }),
+                target.mask
+            );
+            if (candidateFidelity < fidelityFloor) continue;
+            best = candidate;
+            fidelity = candidateFidelity;
         }
     }
 
     return {
         mode: "silhouette",
         confidence: analysis.confidence,
-        commands,
-        target: {
-            kind: "binary",
-            width: canvas.width,
-            height: canvas.height,
-            mask: createCanvasMask(analysis.mask, width, height, canvas, offset),
-            foregroundColor: analysis.foregroundColor,
-            backgroundColor: analysis.backgroundColor
-        },
+        commands: best.commands,
+        target,
         metrics: {
-            contours: contours.length,
-            commands: commands.length,
+            contours: best.contours.length,
+            commands: best.commands.length,
+            contourTolerance: best.tolerance,
+            simulatedIoU: fidelity,
             foregroundCoverage: analysis.stats.foregroundCoverage
         }
     };

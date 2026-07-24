@@ -60,6 +60,15 @@ test("multi-color image uses color fallback", () => {
     assert.equal(analysis.mode, "color");
 });
 
+test("minority colors are preserved through color fallback", () => {
+    const image = createImage(100, 60, (x, y) => {
+        if (y < 5 || y >= 55 || x < 5 || x >= 95) return palette[0];
+        return x < 82 ? palette[1] : palette[2];
+    });
+    const analysis = analyzeImage(image, palette);
+    assert.equal(analysis.mode, "color");
+});
+
 test("contour tracing preserves an outer component and hole", () => {
     const width = 40;
     const height = 40;

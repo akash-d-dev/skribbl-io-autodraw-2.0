@@ -11,7 +11,10 @@ import { createSilhouetteRepairs } from "./planning/silhouette-repair.js";
 import createProgressControl from "./progress-control.js";
 import createToolbar from "./toolbar.js";
 
-const commandIntervalMs = 18;
+const commandIntervals = {
+    silhouette: 16,
+    color: 18
+};
 const domHelper = createDomHelper(document);
 const canvas = createCanvas(domHelper.getCanvasElement());
 const toolbar = createToolbar(domHelper);
@@ -56,7 +59,7 @@ const executePlan = async function (plan, requestId) {
     const generation = canvasGeneration;
     const session = createDrawSession({
         execute: renderer.execute,
-        intervalMs: commandIntervalMs,
+        intervalMs: commandIntervals[plan.mode],
         isValid: () => generation === canvasGeneration && toolbar.isEnabled(),
         onChange: progress.update
     });
