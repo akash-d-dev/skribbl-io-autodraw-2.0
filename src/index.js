@@ -151,6 +151,25 @@ createDragDropListener(
     handleDrop
 );
 
+// skribbl renders on requestAnimationFrame, which the browser suspends while the tab
+// is hidden or occluded. Nothing is drawn at all in that state, so draining commands
+// would silently discard them. Pause instead, and resume when the tab comes back.
+let pausedByVisibility = false;
+document.addEventListener("visibilitychange", () => {
+    if (!activeSession) return;
+    if (document.hidden) {
+        if (activeSession.getSnapshot().state !== "drawing") return;
+        pausedByVisibility = true;
+        activeSession.pause();
+        log("Tab hidden: drawing paused (skribbl only renders while visible).");
+        return;
+    }
+    if (!pausedByVisibility) return;
+    pausedByVisibility = false;
+    activeSession.resume();
+    log("Tab visible: drawing resumed.");
+});
+
 clearToolElement.addEventListener("click", () => {
     if (internalClear) return;
     canvasGeneration++;

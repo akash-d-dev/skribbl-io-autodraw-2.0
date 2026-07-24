@@ -1,16 +1,34 @@
 import { closestPaletteColor, colorKey, colorsEqual } from "./color-utils.js";
+import { planSegments } from "./command-cost.js";
 import { traceContours } from "./contour-tracer.js";
+import { chainRuns } from "./serpentine.js";
 import { distanceInsideValue } from "./distance-map.js";
 import { offsetClosedContour, pointInPolygon } from "./geometry.js";
 
 const white = { r: 255, g: 255, b: 255 };
 const gridScale = 2.9;
-const pens = [
-    { diameter: 40, coverageRadius: 14.4 / gridScale, safeRadius: 21 / gridScale },
-    { diameter: 20, coverageRadius: 7.2 / gridScale, safeRadius: 11 / gridScale },
-    { diameter: 10, coverageRadius: 3.6 / gridScale, safeRadius: 6 / gridScale },
-    { diameter: 4, coverageRadius: 1.45 / gridScale, safeRadius: 0 }
+
+// Measured painted diameters are [3, 9, 19, 31, 39] with no anti-aliasing, so the
+// coverage radius is exactly half the painted diameter. The previous table assumed
+// an effective factor of ~0.72 (14.4 for "40" vs a true 19.5), under-crediting every
+// wide stroke and re-covering pixels already painted -- the cause of the measured 3x
+// overdraw. safeRadius keeps a stroke off the region boundary; it is the coverage
+// radius plus a grid cell of slack, in grid units.
+const measuredPens = [
+    { diameter: 40, paintedDiameter: 39 },
+    { diameter: 32, paintedDiameter: 31 },
+    { diameter: 20, paintedDiameter: 19 },
+    { diameter: 10, paintedDiameter: 9 },
+    { diameter: 4, paintedDiameter: 3 }
 ];
+const pens = measuredPens.map(function (pen) {
+    const coverageRadius = pen.paintedDiameter / 2 / gridScale;
+    return {
+        diameter: pen.diameter,
+        coverageRadius,
+        safeRadius: pen.diameter === 4 ? 0 : coverageRadius + 1
+    };
+});
 
 const downsample = function (image) {
     const width = Math.max(1, Math.round(image.width / gridScale));
@@ -168,25 +186,16 @@ const createFilledRegionCommands = function ({
     geometryFor
 }) {
     const regions = [];
+    // One closed polyline per contour; a stroke per edge costs V commands for the
+    // same geometry.
     const createContourCommands = function (points, color) {
-        const commands = [];
-        for (let index = 0; index < points.length; index++) {
-            const next = points[(index + 1) % points.length];
-            commands.push({
-                kind: "stroke",
-                color,
-                diameter: 4,
-                from: {
-                    x: points[index].x * gridScale + offset.x,
-                    y: points[index].y * gridScale + offset.y
-                },
-                to: {
-                    x: next.x * gridScale + offset.x,
-                    y: next.y * gridScale + offset.y
-                }
-            });
-        }
-        return commands;
+        if (points.length < 2) return [];
+        const translated = points.map(point => ({
+            x: point.x * gridScale + offset.x,
+            y: point.y * gridScale + offset.y
+        }));
+        translated.push(translated[0]);
+        return [{ kind: "polyline", color, diameter: 4, points: translated }];
     };
 
     for (let color = 0; color < colors.length; color++) {
@@ -243,7 +252,9 @@ const createFilledRegionCommands = function ({
                 });
             }
 
-            if (commands.length > component.horizontalRuns * 0.9) continue;
+            // Compared in segments, not commands: a contour is now a single
+            // command, so a command-count test would accept every region.
+            if (planSegments(commands) > component.horizontalRuns * 0.9) continue;
             regions.push({
                 area: component.pixels.length,
                 color,
@@ -500,7 +511,7 @@ export const planColorImage = function ({ image, palette, offset }) {
         filledRegions[regionIndex].baselineStrokes++;
     }
     const selectedRegions = filledRegions.filter(region =>
-        region.commands.length < region.baselineStrokes * 0.8);
+        planSegments(region.commands) < region.baselineStrokes * 0.8);
     const selectedRegionIndexes = new Set(
         selectedRegions.map(region => filledRegions.indexOf(region))
     );
@@ -516,20 +527,44 @@ export const planColorImage = function ({ image, palette, offset }) {
         });
     }
     for (const region of selectedRegions) commands.push(...region.commands);
+
+    // Group by (pen, color) so the plan runs coarse-to-fine and each color is
+    // selected once per group instead of thrashing the palette, then chain each
+    // group's runs into serpentine polylines.
+    const groups = new Map();
     for (const stroke of remainingStrokes) {
-        commands.push({
-            kind: "stroke",
-            color: colors[stroke.color],
-            diameter: stroke.diameter,
-            from: {
-                x: (stroke.x1 + 0.5) * gridScale + offset.x,
-                y: (stroke.y1 + 0.5) * gridScale + offset.y
-            },
-            to: {
-                x: (stroke.x2 + 0.5) * gridScale + offset.x,
-                y: (stroke.y2 + 0.5) * gridScale + offset.y
+        const key = `${stroke.diameter},${stroke.color}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(stroke);
+    }
+    const orderedKeys = [...groups.keys()].sort((first, second) => {
+        const [firstDiameter, firstColor] = first.split(",").map(Number);
+        const [secondDiameter, secondColor] = second.split(",").map(Number);
+        return secondDiameter - firstDiameter || firstColor - secondColor;
+    });
+
+    const toCanvas = point => ({
+        x: (point.x + 0.5) * gridScale + offset.x,
+        y: (point.y + 0.5) * gridScale + offset.y
+    });
+
+    for (const key of orderedKeys) {
+        const group = groups.get(key);
+        const [diameter, color] = key.split(",").map(Number);
+        for (const chain of chainRuns(group)) {
+            const points = chain.map(toCanvas);
+            if (points.length === 2) {
+                commands.push({
+                    kind: "stroke",
+                    color: colors[color],
+                    diameter,
+                    from: points[0],
+                    to: points[1]
+                });
+                continue;
             }
-        });
+            commands.push({ kind: "polyline", color: colors[color], diameter, points });
+        }
     }
 
     return {

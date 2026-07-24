@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { planSegments } from "../src/planning/command-cost.js";
 import { traceContours } from "../src/planning/contour-tracer.js";
 import { analyzeImage } from "../src/planning/image-analyzer.js";
 import { createDrawPlan } from "../src/planning/planner.js";
@@ -95,7 +96,13 @@ test("silhouette planner creates closed outline and fill commands", () => {
     });
 
     assert.equal(plan.mode, "silhouette");
-    assert.equal(plan.commands.filter(command => command.kind === "stroke").length, 4);
+
+    // The outline is one closed polyline, not a stroke per edge.
+    const outlines = plan.commands.filter(command => command.kind === "polyline");
+    assert.equal(outlines.length, 1);
+    assert.equal(planSegments(outlines), 4);
+    assert.deepEqual(outlines[0].points[0], outlines[0].points[4]);
+
     assert.equal(plan.commands.filter(command => command.kind === "fill").length, 1);
     assert.equal(plan.target.mask.length, 8000);
     assert.ok(plan.metrics.planningMs >= 0);

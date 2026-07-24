@@ -3,6 +3,7 @@ import {
     binaryIntersectionOverUnion,
     rasterizeBinaryPlan
 } from "./binary-rasterizer.js";
+import { planSegments } from "./command-cost.js";
 import { traceContours } from "./contour-tracer.js";
 import { distanceInsideValue } from "./distance-map.js";
 import { offsetClosedContour, pointInPolygon } from "./geometry.js";
@@ -33,25 +34,16 @@ const findFillSeed = function (contour, mask, width, height, targetValue, distan
     return best ? { ...best, clearance: bestDistance } : null;
 };
 
+// One closed polyline per contour. Emitting a stroke per vertex costs V commands
+// for identical geometry.
 const contourCommands = function (points, color, offset) {
-    const commands = [];
-    for (let index = 0; index < points.length; index++) {
-        const next = points[(index + 1) % points.length];
-        commands.push({
-            kind: "stroke",
-            color,
-            diameter: 4,
-            from: {
-                x: points[index].x + offset.x,
-                y: points[index].y + offset.y
-            },
-            to: {
-                x: next.x + offset.x,
-                y: next.y + offset.y
-            }
-        });
-    }
-    return commands;
+    if (points.length < 2) return [];
+    const translated = points.map(point => ({
+        x: point.x + offset.x,
+        y: point.y + offset.y
+    }));
+    translated.push(translated[0]);
+    return [{ kind: "polyline", color, diameter: 4, points: translated }];
 };
 
 const createCanvasMask = function (mask, width, height, canvas, offset) {
@@ -132,7 +124,7 @@ export const planSilhouette = function ({
     const requestedTolerance = Math.max(contourTolerance, toleranceCandidates[0]);
     let best = buildCandidate(requestedTolerance);
     let fidelity = null;
-    if (best.commands.length >= optimizationCommandThreshold) {
+    if (planSegments(best.commands) >= optimizationCommandThreshold) {
         const basePlan = { commands: best.commands, target };
         fidelity = binaryIntersectionOverUnion(
             rasterizeBinaryPlan(basePlan),
@@ -141,7 +133,7 @@ export const planSilhouette = function ({
         for (const tolerance of toleranceCandidates) {
             if (tolerance <= requestedTolerance) continue;
             const candidate = buildCandidate(tolerance);
-            if (candidate.commands.length >= best.commands.length) continue;
+            if (planSegments(candidate.commands) >= planSegments(best.commands)) continue;
             const candidateFidelity = binaryIntersectionOverUnion(
                 rasterizeBinaryPlan({ commands: candidate.commands, target }),
                 target.mask

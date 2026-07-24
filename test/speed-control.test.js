@@ -17,9 +17,9 @@ test("drawing speed snaps and clamps to supported half steps", () => {
     assert.equal(normalizeSpeed("invalid"), defaultSpeed);
 });
 
-test("drawing speed starts at the minimum", () => {
-    assert.equal(defaultSpeed, 0);
-    assert.equal(getCommandInterval(18, defaultSpeed), 36);
+test("drawing speed starts at the fastest, since frame pacing is the real floor", () => {
+    assert.equal(defaultSpeed, 10);
+    assert.equal(getCommandInterval(18, defaultSpeed), 0);
 });
 
 test("minimum and maximum speeds map to slowest and fastest intervals", () => {

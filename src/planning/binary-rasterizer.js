@@ -13,29 +13,38 @@ const distanceToSegmentSquared = function (x, y, from, to) {
     return (x - nearestX) ** 2 + (y - nearestY) ** 2;
 };
 
-const drawStroke = function (raster, width, height, command, value) {
-    const minX = Math.max(0, Math.floor(
-        Math.min(command.from.x, command.to.x) - brushRadius
-    ));
-    const maxX = Math.min(width - 1, Math.ceil(
-        Math.max(command.from.x, command.to.x) + brushRadius
-    ));
-    const minY = Math.max(0, Math.floor(
-        Math.min(command.from.y, command.to.y) - brushRadius
-    ));
-    const maxY = Math.min(height - 1, Math.ceil(
-        Math.max(command.from.y, command.to.y) + brushRadius
-    ));
+const drawSegment = function (raster, width, height, from, to, value) {
+    const minX = Math.max(0, Math.floor(Math.min(from.x, to.x) - brushRadius));
+    const maxX = Math.min(width - 1, Math.ceil(Math.max(from.x, to.x) + brushRadius));
+    const minY = Math.max(0, Math.floor(Math.min(from.y, to.y) - brushRadius));
+    const maxY = Math.min(height - 1, Math.ceil(Math.max(from.y, to.y) + brushRadius));
 
     for (let y = minY; y <= maxY; y++) {
         for (let x = minX; x <= maxX; x++) {
             if (distanceToSegmentSquared(
                 x + 0.5,
                 y + 0.5,
-                command.from,
-                command.to
+                from,
+                to
             ) <= brushRadius * brushRadius) raster[y * width + x] = value;
         }
+    }
+};
+
+const drawStroke = function (raster, width, height, command, value) {
+    drawSegment(raster, width, height, command.from, command.to, value);
+};
+
+const drawPolyline = function (raster, width, height, command, value) {
+    for (let index = 0; index < command.points.length - 1; index++) {
+        drawSegment(
+            raster,
+            width,
+            height,
+            command.points[index],
+            command.points[index + 1],
+            value
+        );
     }
 };
 
@@ -73,6 +82,8 @@ export const rasterizeBinaryPlan = function (plan) {
         const value = colorsEqual(command.color, target.foregroundColor) ? 1 : 0;
         if (command.kind === "stroke") {
             drawStroke(raster, target.width, target.height, command, value);
+        } else if (command.kind === "polyline") {
+            drawPolyline(raster, target.width, target.height, command, value);
         } else {
             floodFill(raster, target.width, target.height, command.point, value);
         }

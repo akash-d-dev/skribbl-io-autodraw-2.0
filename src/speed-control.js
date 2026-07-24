@@ -1,7 +1,13 @@
 export const minimumSpeed = 0;
 export const maximumSpeed = 10;
 export const speedStep = 0.5;
-export const defaultSpeed = minimumSpeed;
+
+// Pacing is now inherent: each segment costs two animation frames because skribbl
+// only renders a stroke when a frame boundary falls on both sides of the pointermove.
+// That caps the real rate at ~30 segments/s on a 60Hz panel and ~70 on 144Hz, so the
+// timer interval is pure added latency and the fastest setting is not a spam risk.
+// Default to it; the slider now only slows drawing down.
+export const defaultSpeed = maximumSpeed;
 
 const clampSpeed = value => {
     const numericValue = Number(value);

@@ -12,6 +12,7 @@ export default function createDomHelper(document) {
         getPenToolElement: () => document.querySelector('#game-toolbar .tool[data-tooltip="Brush"]'),
         getFillToolElement: () => document.querySelector('#game-toolbar .tool[data-tooltip="Fill"]'),
         getToolbarElement: () => document.getElementById('game-toolbar'),
+        getGameWrapperElement: () => document.getElementById('game-wrapper'),
 
         hideCanvasOverlay: delay => setTimeout(function () {
             document.body.classList.remove("showingAutodrawOverlay");

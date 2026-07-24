@@ -36,11 +36,23 @@ export default function createCommandRenderer(canvas, toolbar) {
     };
 
     return {
+        getSelection: () => ({
+            tool: selectedTool,
+            color: selectedColor,
+            diameter: selectedDiameter
+        }),
         execute: async function (command) {
             setColor(command.color);
             if (command.kind === "stroke") {
                 setPen(command.diameter);
-                canvas.drawStroke(command.from, command.to);
+                await canvas.drawStroke(command.from, command.to);
+                return;
+            }
+            if (command.kind === "polyline") {
+                setPen(command.diameter);
+                // drawPolyline issues one frame-bracketed gesture per segment; the
+                // page drops moves batched inside a single gesture.
+                await canvas.drawPolyline(command.points);
                 return;
             }
             if (command.kind === "fill") {

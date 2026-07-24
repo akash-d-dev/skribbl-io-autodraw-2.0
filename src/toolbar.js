@@ -40,6 +40,16 @@ export default function createToolbar(domHelper) {
         clear: () => domHelper.getClearToolElement().click(),
         setPenTool: () => domHelper.getPenToolElement().click(),
         setFillTool: () => domHelper.getFillToolElement().click(),
-        isEnabled: () => getComputedStyle(domHelper.getToolbarElement()).display !== "none"
+        // Measured: #game-toolbar keeps computed display:grid even when it is
+        // someone else's turn, so a display check always reported "enabled" and the
+        // draw session never stopped itself at the end of a turn. The real signal is
+        // the "toolbar-hidden" class on #game-wrapper.
+        isEnabled: function () {
+            const wrapper = domHelper.getGameWrapperElement();
+            if (wrapper?.classList.contains("toolbar-hidden")) return false;
+            const toolbar = domHelper.getToolbarElement();
+            if (!toolbar) return false;
+            return getComputedStyle(toolbar).display !== "none";
+        }
     };
 }
