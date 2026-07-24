@@ -1,4 +1,4 @@
-export default function (element, onEnter, onLeave, onDrop) {
+export default function createDragDropListener(element, onEnter, onLeave, onDrop) {
    let debouncer = 0;
 
    element.addEventListener("dragenter", function (event) {

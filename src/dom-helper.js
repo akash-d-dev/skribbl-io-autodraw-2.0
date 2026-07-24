@@ -1,4 +1,4 @@
-export default function (document) {
+export default function createDomHelper(document) {
     const overlay = document.createElement("div");
     overlay.id = "autoDrawOverlay";
     document.getElementById('game-canvas').appendChild(overlay);
@@ -15,7 +15,7 @@ export default function (document) {
 
         hideCanvasOverlay: delay => setTimeout(function () {
             document.body.classList.remove("showingAutodrawOverlay");
-            }, delay || 0),
+        }, delay || 0),
 
         showCanvasOverlay: text => {
             overlay.innerText = text;

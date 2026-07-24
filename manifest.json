@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "AutoDraw for skribbl.io",
     "description": "Auto draws images in pictionary game skribbl.io.",
-    "version": "0.3.3",
+    "version": "0.4.0",
     "icons": {
         "128": "icon128.png"
     },
@@ -16,6 +16,16 @@
             ],
             "js": [
                 "dist/main.js"
+            ]
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "dist/planner-worker.js"
+            ],
+            "matches": [
+                "https://skribbl.io/*"
             ]
         }
     ],

@@ -1,46 +1,36 @@
-import log from "./log";
+import log from "./log.js";
 
-export function fillImage(size, image) {
-    let factor = Math.max(size.width / image.width, size.height / image.height);
-
-    let dw = factor * image.width;
-    let dh = factor * image.height;
-
-    let dx = (size.width - dw) / 2;
-    let dy = (size.height - dh) / 2;
-
-    return scale(size, ctx => ctx.drawImage(image, dx, dy, dw, dh));
-};
-
-export function fitImage(size, image) {
-    let factor = Math.min(size.width / image.width, size.height / image.height);
-
-    let dw = factor * image.width;
-    let dh = factor * image.height;
-
-    return scale({ width: dw, height: dh }, ctx => ctx.drawImage(image, 0, 0, dw, dh));
-};
-
-let scale = function (size, draw) {
-    log(`Scaling image to ${size.width} x ${size.height}...`);
-
-    let canvas = document.createElement("canvas");
-    canvas.width = size.width;
-    canvas.height = size.height;
-
-    let context = canvas.getContext("2d");
-    context.imageSmoothingEnabled = false; // Smoothing creates weird edge color artifacts in a downsampled image.
-    draw(context);
-
-    return context.getImageData(0, 0, canvas.width, canvas.height);
-};
+export function prepareImage(size, image, margin = 12) {
+    const availableWidth = Math.max(1, size.width - margin * 2);
+    const availableHeight = Math.max(1, size.height - margin * 2);
+    const sourceWidth = image.naturalWidth || image.width;
+    const sourceHeight = image.naturalHeight || image.height;
+    const factor = Math.min(availableWidth / sourceWidth, availableHeight / sourceHeight);
+    const width = Math.max(1, Math.round(sourceWidth * factor));
+    const height = Math.max(1, Math.round(sourceHeight * factor));
+    const offset = {
+        x: Math.round((size.width - width) / 2),
+        y: Math.round((size.height - height) / 2)
+    };
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+    return {
+        image: context.getImageData(0, 0, width, height),
+        offset
+    };
+}
 
 export function loadImage(url) {
     return new Promise((resolve, reject) => {
         const image = new Image;
         image.crossOrigin = "Anonymous";
         image.onload = function () {
-            const blockedByCors = image.height === image.width === 0;
+            const blockedByCors = image.height === 0 || image.width === 0;
             const executor = blockedByCors ? reject : resolve;
             executor(image);
         };
@@ -49,4 +39,4 @@ export function loadImage(url) {
         log(`Attempting to load image: ${url}...`);
         image.src = url;
     });
-};
+}
