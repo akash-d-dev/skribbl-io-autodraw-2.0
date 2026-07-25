@@ -56,6 +56,21 @@ export const strokeDeliveryRate = 0.85;
 // brackets the ~3,000 design point.
 export const framesPerSegment = 2;
 
+// Because the cost is per SEGMENT and not per command, batching segments into one
+// command buys nothing, and anything that adds segments to save commands is a loss.
+// Measured on promo-image: chaining coverage runs into serpentine polylines cost
+// 2,528 segments (35.1s) versus 1,599 (22.2s) unchained, at identical error -- every
+// lane-to-lane connector is an extra segment. Optimise segment count, not command
+// count, and prefer long segments: they are cheaper per pixel covered and measured
+// more reliable to deliver.
+export const costIsPerSegment = true;
+
+// Pipelining and multiple pointerIds both run at 6.9ms/segment but deliver only
+// ~50%, i.e. the same ~72 segments/s as the reliable 2-frame primitive. skribbl
+// retires roughly one segment per two frames however the events are shaped, so there
+// is no event-level trick left; speed has to come from emitting fewer segments.
+export const effectiveSegmentsPerSecond = 72;
+
 // CRITICAL: rAF is suspended while the tab is hidden or occluded, and skribbl
 // renders on rAF, so NOTHING is drawn at all. Measured: visibilityState "hidden",
 // zero rAF callbacks in 2.2s, and every queued stroke stalled. The extension must

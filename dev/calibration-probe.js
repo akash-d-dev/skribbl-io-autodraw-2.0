@@ -638,6 +638,134 @@
         return { results };
     };
 
+    // Two ways to amortise the 2-frame cost down towards 1 frame per segment:
+    //   pipelined  - one gesture's pointerup shares a task with the next gesture's
+    //                pointerdown+pointermove, so each frame retires one segment
+    //   twoPointers- two independent pointerIds in flight at once, in case the page
+    //                tracks pointers separately (multi-touch style)
+    probes.pipeline = async function () {
+        const { canvas } = dom();
+        const scale = scaleOf(canvas);
+
+        const pointerWithId = function (id, name, point, pressed) {
+            const client = toClient(canvas, point);
+            canvas.dispatchEvent(new PointerEvent(name, {
+                pointerId: id,
+                pointerType: "mouse",
+                isPrimary: id === 1,
+                bubbles: true,
+                cancelable: true,
+                clientX: client.x,
+                clientY: client.y,
+                button: 0,
+                buttons: pressed ? 1 : 0
+            }));
+        };
+
+        const makeTargets = function () {
+            const targets = [];
+            for (let row = 0; row < 10; row++) {
+                for (let column = 0; column < 6; column++) {
+                    const x = 80 + column * 110;
+                    const y = 60 + row * 50;
+                    targets.push({ from: { x, y }, to: { x: x + 70, y } });
+                }
+            }
+            return targets;
+        };
+
+        const score = function (image, targets) {
+            let delivered = 0;
+            for (const target of targets) {
+                let painted = 0;
+                for (let x = target.from.x; x <= target.to.x; x++) {
+                    for (let d = -3; d <= 3; d++) {
+                        if (isPainted(
+                            image,
+                            Math.round(x * scale),
+                            Math.round((target.from.y + d) * scale)
+                        )) {
+                            painted++;
+                            break;
+                        }
+                    }
+                }
+                if (painted > 55) delivered++;
+            }
+            return delivered;
+        };
+
+        const runs = {};
+
+        // pipelined, single pointer
+        {
+            await clearCanvas();
+            requireTurn();
+            selectColor(BLACK);
+            selectPen(0);
+            await frame();
+            const targets = makeTargets();
+            const startedAt = performance.now();
+            let open = null;
+            for (const target of targets) {
+                if (open) pointer(canvas, "pointerup", open, false);
+                pointer(canvas, "pointerdown", target.from, true);
+                pointer(canvas, "pointermove", target.to, true);
+                open = target.to;
+                await frame();
+            }
+            pointer(canvas, "pointerup", open, false);
+            const elapsedMs = performance.now() - startedAt;
+            await sleep(600);
+            requireTurn();
+            const delivered = score(snapshot(canvas), targets);
+            runs.pipelinedSinglePointer = {
+                attempted: targets.length,
+                delivered,
+                deliveryRate: Number((delivered / targets.length).toFixed(3)),
+                msPerSegment: Number((elapsedMs / targets.length).toFixed(1)),
+                segmentsPerSecond: Math.round(targets.length / (elapsedMs / 1000))
+            };
+        }
+
+        // two pointer ids in flight
+        {
+            await clearCanvas();
+            requireTurn();
+            selectColor(BLACK);
+            selectPen(0);
+            await frame();
+            const targets = makeTargets();
+            const startedAt = performance.now();
+            for (let i = 0; i < targets.length; i += 2) {
+                const a = targets[i];
+                const b = targets[i + 1];
+                pointerWithId(1, "pointerdown", a.from, true);
+                if (b) pointerWithId(2, "pointerdown", b.from, true);
+                pointerWithId(1, "pointermove", a.to, true);
+                if (b) pointerWithId(2, "pointermove", b.to, true);
+                await frame();
+                pointerWithId(1, "pointerup", a.to, false);
+                if (b) pointerWithId(2, "pointerup", b.to, false);
+                await frame();
+            }
+            const elapsedMs = performance.now() - startedAt;
+            await sleep(600);
+            requireTurn();
+            const delivered = score(snapshot(canvas), targets);
+            runs.twoPointerIds = {
+                attempted: targets.length,
+                delivered,
+                deliveryRate: Number((delivered / targets.length).toFixed(3)),
+                msPerSegment: Number((elapsedMs / targets.length).toFixed(1)),
+                segmentsPerSecond: Math.round(targets.length / (elapsedMs / 1000))
+            };
+        }
+
+        await clearCanvas();
+        return runs;
+    };
+
     // Can a segment be delivered in ONE frame instead of two? That is a straight 2x
     // on total draw time, so it is worth knowing exactly. Also tries pipelining, where
     // one gesture's pointerup shares a task with the next gesture's pointerdown.

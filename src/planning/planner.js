@@ -7,7 +7,12 @@ export const createDrawPlan = function ({
     palette,
     canvas,
     offset,
-    contourTolerance = 1.25
+    contourTolerance = 1.25,
+    gridScale,
+    despecklePasses,
+    minimumComponentArea,
+    chainSerpentines,
+    penSlack
 }) {
     const startedAt = performance.now();
     const analysis = analyzeImage(image, palette);
@@ -20,7 +25,16 @@ export const createDrawPlan = function ({
             offset,
             contourTolerance
         })
-        : planColorImage({ image, palette, offset });
+        : planColorImage({
+            image,
+            palette,
+            offset,
+            gridScale,
+            despecklePasses,
+            minimumComponentArea,
+            chainSerpentines,
+            penSlack
+        });
 
     plan.metrics.planningMs = Math.round(performance.now() - startedAt);
     plan.metrics.modeConfidence = analysis.confidence;

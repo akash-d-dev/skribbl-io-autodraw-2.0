@@ -3,10 +3,11 @@ import { planSegments } from "./command-cost.js";
 import { traceContours } from "./contour-tracer.js";
 import { chainRuns } from "./serpentine.js";
 import { distanceInsideValue } from "./distance-map.js";
+import { evaluateFilledRegion } from "./fill-verifier.js";
 import { offsetClosedContour, pointInPolygon } from "./geometry.js";
 
 const white = { r: 255, g: 255, b: 255 };
-const gridScale = 2.9;
+const defaultGridScale = 2.9;
 
 // Measured painted diameters are [3, 9, 19, 31, 39] with no anti-aliasing, so the
 // coverage radius is exactly half the painted diameter. The previous table assumed
@@ -21,14 +22,25 @@ const measuredPens = [
     { diameter: 10, paintedDiameter: 9 },
     { diameter: 4, paintedDiameter: 3 }
 ];
-const pens = measuredPens.map(function (pen) {
-    const coverageRadius = pen.paintedDiameter / 2 / gridScale;
-    return {
-        diameter: pen.diameter,
-        coverageRadius,
-        safeRadius: pen.diameter === 4 ? 0 : coverageRadius + 1
-    };
-});
+
+// Coarsening the grid is the cheapest way to cut segment count, and each segment
+// costs two animation frames, so it maps directly to draw time. Set per plan.
+let gridScale = defaultGridScale;
+let pens = [];
+let penSlackCells = 1;
+const configureGrid = function (scale, slack = penSlackCells) {
+    gridScale = scale;
+    penSlackCells = slack;
+    pens = measuredPens.map(function (pen) {
+        const coverageRadius = pen.paintedDiameter / 2 / gridScale;
+        return {
+            diameter: pen.diameter,
+            coverageRadius,
+            safeRadius: pen.diameter === 4 ? 0 : coverageRadius + penSlackCells
+        };
+    });
+};
+configureGrid(defaultGridScale);
 
 const downsample = function (image) {
     const width = Math.max(1, Math.round(image.width / gridScale));
@@ -80,23 +92,88 @@ const quantize = function (image, palette) {
     return { colors, indexes };
 };
 
-const smoothIsolatedPixels = function (indexes, width, height) {
-    const source = indexes.slice();
-    for (let y = 1; y < height - 1; y++) {
-        for (let x = 1; x < width - 1; x++) {
-            const pixel = y * width + x;
-            const counts = new Map();
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                    const color = source[(y + dy) * width + x + dx];
-                    counts.set(color, (counts.get(color) || 0) + 1);
+// A 3x3 majority pass. Speckle is the single biggest consumer of draw time: every
+// stray one-cell run becomes its own stroke, and a stroke costs two animation frames
+// regardless of how little it covers. Removing it cuts segments AND error, unlike
+// coarsening the grid, which trades error away for speed.
+const smoothIsolatedPixels = function (indexes, width, height, passes = 1) {
+    for (let pass = 0; pass < passes; pass++) {
+        const source = indexes.slice();
+        let changed = 0;
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                const pixel = y * width + x;
+                const counts = new Map();
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const color = source[(y + dy) * width + x + dx];
+                        counts.set(color, (counts.get(color) || 0) + 1);
+                    }
+                }
+                const currentCount = counts.get(source[pixel]);
+                const dominant = [...counts.entries()]
+                    .sort((first, second) => second[1] - first[1])[0];
+                if (dominant[0] === source[pixel]) continue;
+                if (currentCount <= 3 && dominant[1] >= 4) {
+                    indexes[pixel] = dominant[0];
+                    changed++;
                 }
             }
-            const currentCount = counts.get(source[pixel]);
-            const dominant = [...counts.entries()]
-                .sort((first, second) => second[1] - first[1])[0];
-            if (currentCount <= 2 && dominant[1] >= 5) indexes[pixel] = dominant[0];
         }
+        if (!changed) break;
+    }
+};
+
+// Dissolve components too small to be worth their own strokes into whichever
+// neighbouring color already borders them most.
+const absorbSmallComponents = function (indexes, width, height, minimumArea) {
+    const visited = new Uint8Array(indexes.length);
+
+    for (let start = 0; start < indexes.length; start++) {
+        if (visited[start]) continue;
+        const color = indexes[start];
+        const queue = [start];
+        const component = [];
+        visited[start] = 1;
+
+        for (let cursor = 0; cursor < queue.length; cursor++) {
+            const pixel = queue[cursor];
+            component.push(pixel);
+            const x = pixel % width;
+            const y = (pixel - x) / width;
+            const neighbors = [
+                x > 0 ? pixel - 1 : -1,
+                x + 1 < width ? pixel + 1 : -1,
+                y > 0 ? pixel - width : -1,
+                y + 1 < height ? pixel + width : -1
+            ];
+            for (const next of neighbors) {
+                if (next < 0 || visited[next] || indexes[next] !== color) continue;
+                visited[next] = 1;
+                queue.push(next);
+            }
+        }
+        if (component.length >= minimumArea) continue;
+
+        const borderCounts = new Map();
+        for (const pixel of component) {
+            const x = pixel % width;
+            const y = (pixel - x) / width;
+            const neighbors = [
+                x > 0 ? pixel - 1 : -1,
+                x + 1 < width ? pixel + 1 : -1,
+                y > 0 ? pixel - width : -1,
+                y + 1 < height ? pixel + width : -1
+            ];
+            for (const next of neighbors) {
+                if (next < 0 || indexes[next] === color) continue;
+                borderCounts.set(indexes[next], (borderCounts.get(indexes[next]) || 0) + 1);
+            }
+        }
+        if (!borderCounts.size) continue;
+        const replacement = [...borderCounts.entries()]
+            .sort((first, second) => second[1] - first[1])[0][0];
+        for (const pixel of component) indexes[pixel] = replacement;
     }
 };
 
@@ -146,6 +223,22 @@ const labelColorComponents = function (indexes, width, height, color) {
         }
     }
     return { labels, components };
+};
+
+// Outline simplification levels tried per region, cheapest (coarsest) first.
+const fillToleranceCandidates = [0.75, 1.5, 2.5, 4];
+const fillFidelityFloor = 0.9;
+
+// The same component traced at a coarser tolerance: the contour whose polygon still
+// contains the seed we already picked.
+const matchContour = function (contours, seed) {
+    let best = null;
+    for (const contour of contours) {
+        if (contour.depth !== 0) continue;
+        if (!pointInPolygon(seed, contour.points)) continue;
+        if (!best || Math.abs(contour.area) < Math.abs(best.area)) best = contour;
+    }
+    return best;
 };
 
 const findContourSeed = function (
@@ -201,7 +294,11 @@ const createFilledRegionCommands = function ({
     for (let color = 0; color < colors.length; color++) {
         if (color === background) continue;
         const { mask, distance, inverseDistance } = geometryFor(color);
-        const contours = traceContours(mask, width, height, 0.75);
+        const contoursByTolerance = new Map(
+            fillToleranceCandidates.map(tolerance =>
+                [tolerance, traceContours(mask, width, height, tolerance)])
+        );
+        const contours = contoursByTolerance.get(fillToleranceCandidates[0]);
         const { labels, components } = labelColorComponents(
             indexes,
             width,
@@ -217,7 +314,40 @@ const createFilledRegionCommands = function ({
             const component = components[labels[seed.pixel]];
             if (!component || component.pixels.length < 30) continue;
 
-            const points = offsetClosedContour(contour.points, 0.5, true);
+            // A fill costs one command whatever the area, so the outline dominates its
+            // price. Take the most simplified outline that still holds the fill in:
+            // coarser contours are cheaper AND measured more reliable to draw, but
+            // eventually open a gap or distort the shape. evaluateFilledRegion catches
+            // both, so this searches rather than guessing a single tolerance.
+            const penRadius = pens[pens.length - 1].coverageRadius;
+            let chosen = null;
+            for (const tolerance of [...fillToleranceCandidates].reverse()) {
+                const candidateContour = tolerance === fillToleranceCandidates[0]
+                    ? contour
+                    : matchContour(contoursByTolerance.get(tolerance), seed);
+                if (!candidateContour) continue;
+
+                const candidatePoints = offsetClosedContour(
+                    candidateContour.points,
+                    0.5,
+                    true
+                );
+                const verdict = evaluateFilledRegion({
+                    points: candidatePoints,
+                    seedPixel: seed.pixel,
+                    radius: penRadius,
+                    width,
+                    height,
+                    regionPixels: component.pixels
+                });
+                if (verdict.escaped) continue;
+                if (verdict.intersectionOverUnion < fillFidelityFloor) continue;
+                chosen = { points: candidatePoints, verdict };
+                break;
+            }
+            if (!chosen) continue;
+
+            const points = chosen.points;
             const commands = createContourCommands(points, colors[color]);
             commands.push({
                 kind: "fill",
@@ -403,10 +533,40 @@ const residualRuns = function (indexes, covered, width, height, background) {
     return strokes;
 };
 
-export const planColorImage = function ({ image, palette, offset }) {
+export const planColorImage = function ({
+    image,
+    palette,
+    offset,
+    gridScale: requestedGridScale = defaultGridScale,
+    // Measured on promo-image at grid 2.9: these cut 3,957 segments to 2,681, i.e.
+    // 55.0s -> 37.3s of drawing, for a mean-error rise of 39.5 -> 43.0. Coarsening the
+    // grid to 4.0 reaches the same 35.6s but at error 47.3, so despeckling is
+    // strictly the better trade and is preferred over a coarser grid.
+    despecklePasses = 2,
+    minimumComponentArea = 8,
+    // Chaining runs into serpentine polylines is a measured LOSS: draw cost is per
+    // segment (two animation frames each), and every lane-to-lane connector is an
+    // extra segment. Unchained is 2,528 -> 1,599 segments on promo-image, 35.1s ->
+    // 22.2s, at identical error. Kept switchable only because it would win again if
+    // segments ever became batchable.
+    chainSerpentines = false,
+    // Clearance a wide pen keeps from a region boundary, in grid cells, on top of its
+    // own radius. Tightening 1 -> 0.25 lets the wide pens actually get used:
+    // 1,599 -> 1,269 segments for a mean-error change of only 42.6 -> 43.1.
+    penSlack = 0.25
+}) {
+    configureGrid(requestedGridScale, penSlack);
     const gridImage = downsample(image);
     const { colors, indexes } = quantize(gridImage, palette);
-    smoothIsolatedPixels(indexes, gridImage.width, gridImage.height);
+    smoothIsolatedPixels(indexes, gridImage.width, gridImage.height, despecklePasses);
+    if (minimumComponentArea > 1) {
+        absorbSmallComponents(
+            indexes,
+            gridImage.width,
+            gridImage.height,
+            minimumComponentArea
+        );
+    }
     const background = mostCommonColor(indexes, colors.length);
     const covered = new Uint8Array(indexes.length);
     for (let pixel = 0; pixel < indexes.length; pixel++) {
@@ -551,7 +711,10 @@ export const planColorImage = function ({ image, palette, offset }) {
     for (const key of orderedKeys) {
         const group = groups.get(key);
         const [diameter, color] = key.split(",").map(Number);
-        for (const chain of chainRuns(group)) {
+        const chains = chainSerpentines
+            ? chainRuns(group)
+            : group.map(run => [{ x: run.x1, y: run.y1 }, { x: run.x2, y: run.y2 }]);
+        for (const chain of chains) {
             const points = chain.map(toCanvas);
             if (points.length === 2) {
                 commands.push({
